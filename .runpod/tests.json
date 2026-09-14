@@ -1,0 +1,24 @@
+{
+  "tests": [
+    {
+      "name": "health_smoke",
+      "input": { "route": "/health", "method": "GET" },
+      "timeout": 120000
+    },
+    {
+      "name": "text_to_video_tiny",
+      "input": {
+        "action": "generate",
+        "prompt": "a cat sitting on a windowsill",
+        "duration": 4,
+        "ratio": "1:1"
+      },
+      "timeout": 600000
+    }
+  ],
+  "config": {
+    "gpuTypeId": "NVIDIA A40",
+    "gpuCount": 1,
+    "env": [{ "key": "SGLANG_MODEL_VARIANT", "value": "fl2va" }]
+  }
+}

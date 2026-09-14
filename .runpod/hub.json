@@ -1,0 +1,50 @@
+{
+  "title": "MiniMax-H3",
+  "description": "Serverless worker for MiniMaxAI/MiniMax-H3 — a 33B omni-modal video+audio generation model (text/image/video/audio -> video + stereo audio), served via SGLang. NOTE: the MiniMax H3 Community License applies (territory & usage restrictions; outputs may not be used to train other models).",
+  "type": "serverless",
+  "category": "video",
+  "iconUrl": "https://dummyimage.com/100x100/7c3aed/fff&text=H3",
+  "config": {
+    "runsOn": "GPU",
+    "containerDiskInGb": 150,
+    "gpuIds": "ADA_80_PRO,AMPERE_80",
+    "gpuCount": 1,
+    "allowedCudaVersions": ["12.8", "12.7", "12.6", "12.5", "12.4"],
+    "env": [
+      {
+        "key": "SGLANG_MODEL_VARIANT",
+        "input": {
+          "name": "Model variant",
+          "type": "string",
+          "description": "Which MiniMax-H3 task variant to serve.",
+          "default": "fl2va",
+          "required": true,
+          "options": [
+            { "label": "FL2VA (text-to-audio-video)", "value": "fl2va" },
+            { "label": "Ref2VA (reference-to-audio-video)", "value": "ref2va" }
+          ]
+        }
+      },
+      {
+        "key": "SGLANG_NUM_GPUS",
+        "input": { "name": "Num GPUs", "type": "number", "default": 1, "min": 1, "max": 8, "advanced": true }
+      },
+      {
+        "key": "SGLANG_ULYSSES_DEGREE",
+        "input": { "name": "Ulysses degree", "type": "number", "default": 1, "min": 1, "max": 8, "advanced": true }
+      },
+      {
+        "key": "SGLANG_PERFORMANCE_MODE",
+        "input": { "name": "Performance mode", "type": "string", "default": "speed", "advanced": true }
+      },
+      {
+        "key": "MAX_CONCURRENCY",
+        "input": { "name": "Max concurrency", "type": "number", "default": 4, "min": 1, "max": 64, "advanced": true }
+      },
+      {
+        "key": "HF_TOKEN",
+        "input": { "name": "Hugging Face token", "type": "string", "description": "Only if the model is gated for your account.", "advanced": true }
+      }
+    ]
+  }
+}

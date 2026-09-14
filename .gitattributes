@@ -1,0 +1,11 @@
+# Normalize line endings: LF in the repo, let Git handle conversion per-OS.
+* text=auto eol=lf
+
+# Force LF for files that must keep LF inside Linux containers/CI.
+*.sh        text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+Dockerfile  text eol=lf
+*.py        text eol=lf
+*.json      text eol=lf
+*.hcl       text eol=lf

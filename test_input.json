@@ -1,0 +1,8 @@
+{
+  "input": {
+    "action": "generate",
+    "prompt": "a red balloon drifting over a city",
+    "duration": 4,
+    "ratio": "16:9"
+  }
+}
