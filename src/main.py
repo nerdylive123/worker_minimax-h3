@@ -1,12 +1,15 @@
-"""Supervisor entrypoint for the MiniMax-H3 RunPod worker.
+"""Supervisor entrypoint for the MiniMax-H3 RunPod worker (ComfyUI backend).
 
-1. Optionally switch to a baked-in offline model (/local_model_args.json).
-2. Launch ``sglang serve`` as a subprocess.
-3. Poll its /health endpoint until ready (or a classified startup failure).
-4. Start the RunPod serverless loop with the async proxy handler.
+Boot sequence:
+  1. Resolve the cached Comfy-Org/MiniMax-H3 snapshot (cache-first; falls back
+     to a Hub download into the same cache dir when absent).
+  2. Map the chosen variant/precision single-file components into ComfyUI's
+     models/ tree (diffusion_models, text_encoders, vae) via symlinks.
+  3. Launch ComfyUI headless and poll its health endpoint.
+  4. Start the RunPod serverless loop with the async proxy handler.
 
-On startup failure the worker stays alive and answers every job with the
-classified cause instead of crash-looping the container.
+On startup failure the worker stays alive and answers every job with the cause
+instead of crash-looping the container.
 """
 
 from __future__ import annotations
@@ -16,117 +19,189 @@ import json
 import os
 import subprocess
 import time
-from typing import Optional
+from typing import Dict, Optional
 
 import aiohttp
 
 import runpod
 
-from args_builder import build_serve_argv, get_config
-from startup_errors import classify
+import model_cache
+import model_files
 
-LOCAL_MODEL_ARGS_PATH = "/local_model_args.json"
+# --- Configuration (env-overridable) -----------------------------------------
+
+MODEL_ID = os.getenv("MODEL_NAME", "Comfy-Org/MiniMax-H3")
+MODEL_VARIANT = os.getenv("MODEL_VARIANT", "fl2va")  # fl2va | ref2va
+PRECISION = os.getenv("PRECISION", "bf16")  # bf16 | fp8_scaled | int8_convrot | pruned_*
+COMFYUI_DIR = os.getenv("COMFYUI_DIR", "/ComfyUI")
+COMFYUI_PORT = int(os.getenv("COMFYUI_PORT", "8188"))
+COMFYUI_STARTUP_TIMEOUT = float(os.getenv("COMFYUI_STARTUP_TIMEOUT", "900"))
 HEALTH_POLL_INTERVAL = 2.0
 
 
-def _apply_baked_model() -> None:
-    """If the model was baked into the image, point SGLang at it offline."""
-    if not os.path.exists(LOCAL_MODEL_ARGS_PATH):
-        return
-    with open(LOCAL_MODEL_ARGS_PATH, "r", encoding="utf-8") as f:
-        args = json.load(f)
-    if args.get("model_path"):
-        os.environ["SGLANG_MODEL_PATH"] = args["model_path"]
-        os.environ.setdefault("HF_HUB_OFFLINE", "1")
-        os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-        print(f"[main] Using baked model at {args['model_path']}", flush=True)
+def _pick_files(snapshot: str) -> Dict[str, str]:
+    """Resolve the on-disk component files for the configured variant/precision."""
+    names = model_files.resolve_filenames(MODEL_VARIANT, PRECISION)
+    files = {
+        "diffusion_models": os.path.join(snapshot, "diffusion_models", names["unet_name"]),
+        "text_encoders": os.path.join(snapshot, "text_encoders", names["clip_name"]),
+        "vae": os.path.join(snapshot, "vae", names["vae_name"]),
+        "audio_vae": os.path.join(snapshot, "vae", names["audio_vae_name"]),
+        "loras": os.path.join(snapshot, "loras", names["turbo_lora"]),
+    }
+    # LoRA is optional (turbo mode); only hard-require the core components.
+    required = {k: v for k, v in files.items() if k != "loras"}
+    missing = [p for p in required.values() if not os.path.isfile(p)]
+    if missing:
+        raise RuntimeError(
+            "Expected model component(s) missing from cache: " + ", ".join(missing)
+        )
+    return files
 
 
-def _launch_sglang() -> subprocess.Popen:
-    argv = build_serve_argv()
-    print(f"[main] Launching: {' '.join(argv)}", flush=True)
-    return subprocess.Popen(
-        argv,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
+def _link_into_comfyui(files: Dict[str, str]) -> None:
+    """Symlink the chosen component files into ComfyUI's models tree."""
+    targets = {
+        "diffusion_models": os.path.join(COMFYUI_DIR, "models", "diffusion_models"),
+        "text_encoders": os.path.join(COMFYUI_DIR, "models", "text_encoders"),
+        "vae": os.path.join(COMFYUI_DIR, "models", "vae"),
+        "audio_vae": os.path.join(COMFYUI_DIR, "models", "vae"),
+        "loras": os.path.join(COMFYUI_DIR, "models", "loras"),
+    }
+    for key, src in files.items():
+        if not os.path.isfile(src):
+            continue  # optional components (e.g. turbo LoRA) may be absent
+        dest_dir = targets[key]
+        os.makedirs(dest_dir, exist_ok=True)
+        dest = os.path.join(dest_dir, os.path.basename(src))
+        if os.path.islink(dest) or os.path.exists(dest):
+            os.remove(dest)
+        os.symlink(src, dest)
+        print(f"[main] linked {src} -> {dest}", flush=True)
+
+
+def _resolve_model() -> str:
+    """Return the local snapshot path, downloading into the cache if needed."""
+    if model_cache.snapshot_available(MODEL_ID):
+        model_cache.set_offline()
+        snapshot = model_cache.resolve_snapshot_path(MODEL_ID)
+        print(f"[main] using cached model at {snapshot}", flush=True)
+        return snapshot
+
+    # Cache miss: download into HF cache (HF_HOME points at the same root).
+    print(f"[main] cache miss; downloading {MODEL_ID} ...", flush=True)
+    from huggingface_hub import snapshot_download
+
+    snapshot = snapshot_download(
+        repo_id=MODEL_ID,
+        token=os.environ.get("HF_TOKEN"),
     )
+    model_cache.set_offline()
+    print(f"[main] downloaded model to {snapshot}", flush=True)
+    return snapshot
 
 
 def _drain_log(proc: subprocess.Popen, max_chars: int = 20000) -> str:
-    """Read whatever sglang has emitted so far (non-blocking best effort)."""
-    if proc.stdout is None:
-        return ""
-    try:
-        data = proc.stdout.read() or ""
-    except Exception:  # noqa: BLE001
-        data = ""
-    return data[-max_chars:]
+    """Return recent child output without blocking on a live process.
+
+    The launch starts a background thread that continuously drains the child's
+    stdout into a bounded buffer, so this never waits on EOF and the child
+    never blocks on a full pipe while logging.
+    """
+    buffer = getattr(proc, "_log_buffer", None)
+    if buffer is not None:
+        with buffer["lock"]:
+            return buffer["data"][-max_chars:]
+    return ""
 
 
-async def _wait_for_health(port: str, timeout: float, proc: subprocess.Popen) -> Optional[str]:
-    """Poll /health until ready. Returns None on success, else an error log string."""
-    url = f"http://127.0.0.1:{port}/health"
-    deadline = time.monotonic() + timeout
+def _launch_comfyui() -> subprocess.Popen:
+    argv = [
+        "python3",
+        os.path.join(COMFYUI_DIR, "main.py"),
+        "--listen",
+        "0.0.0.0",
+        "--port",
+        str(COMFYUI_PORT),
+        "--disable-auto-launch",
+    ]
+    extra = os.getenv("COMFYUI_EXTRA_ARGS", "").strip()
+    if extra:
+        import shlex
+
+        argv.extend(shlex.split(extra))
+    print(f"[main] launching: {' '.join(argv)}", flush=True)
+    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+    # Drain stdout in the background into a bounded buffer so the child never
+    # blocks on a full pipe and _drain_log never waits on EOF of a live proc.
+    import threading
+
+    buffer = {"data": "", "lock": threading.Lock()}
+
+    def _pump() -> None:
+        try:
+            for chunk in iter(lambda: proc.stdout.read(4096), ""):  # type: ignore[union-attr]
+                if not chunk:
+                    break
+                with buffer["lock"]:
+                    buffer["data"] = (buffer["data"] + chunk)[-20000:]
+        except Exception:  # noqa: BLE001
+            pass
+
+    threading.Thread(target=_pump, daemon=True).start()
+    proc._log_buffer = buffer  # type: ignore[attr-defined]
+    return proc
+
+
+async def _wait_for_health(proc: subprocess.Popen) -> Optional[str]:
+    url = f"http://127.0.0.1:{COMFYUI_PORT}/"
+    deadline = time.monotonic() + COMFYUI_STARTUP_TIMEOUT
     async with aiohttp.ClientSession() as session:
         while time.monotonic() < deadline:
             if proc.poll() is not None:
-                # Process exited before becoming healthy.
-                return _drain_log(proc) or f"sglang exited with code {proc.returncode}"
+                return _drain_log(proc) or f"ComfyUI exited with code {proc.returncode}"
             try:
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                    if resp.status == 200:
+                    if resp.status in (200, 404):  # server is up
                         return None
             except aiohttp.ClientError:
                 pass
             await asyncio.sleep(HEALTH_POLL_INTERVAL)
-    return _drain_log(proc) or "sglang did not become healthy before the startup timeout"
+    return _drain_log(proc) or "ComfyUI did not become healthy before the startup timeout"
 
 
-def _startup_error_handler_factory(error: dict):
-    """Build a handler that always returns the classified startup error."""
-
-    def _handler(job):  # noqa: ARG001 - every job gets the same cause
-        return {
-            "error": "SGLang failed to start; see 'startup' for details.",
-            "startup": error,
-        }
+def _startup_error_handler_factory(message: str):
+    def _handler(job):  # noqa: ARG001
+        return {"error": "Worker failed to start; see 'startup' for details.", "startup": message}
 
     return _handler
 
 
 async def _run() -> None:
-    _apply_baked_model()
-    cfg = get_config()
-
     try:
-        proc = _launch_sglang()
-    except (ValueError, OSError) as exc:
-        error = classify(str(exc)).to_dict()
-        runpod.serverless.start({"handler": _startup_error_handler_factory(error)})
+        snapshot = _resolve_model()
+        files = _pick_files(snapshot)
+        _link_into_comfyui(files)
+        proc = _launch_comfyui()
+    except (ValueError, RuntimeError, OSError) as exc:
+        runpod.serverless.start({"handler": _startup_error_handler_factory(str(exc))})
         return
 
-    startup_timeout = float(os.getenv("SGLANG_STARTUP_TIMEOUT", "1800"))
-    err_log = await _wait_for_health(cfg["SGLANG_PORT"], startup_timeout, proc)
-
-    if err_log is not None:
-        error = classify(err_log).to_dict()
-        print(f"[main] Startup failure: {error}", flush=True)
-        runpod.serverless.start({"handler": _startup_error_handler_factory(error)})
+    err = await _wait_for_health(proc)
+    if err is not None:
+        runpod.serverless.start({"handler": _startup_error_handler_factory(err)})
         return
 
-    print("[main] SGLang healthy; starting RunPod serverless loop.", flush=True)
+    print("[main] ComfyUI healthy; starting RunPod serverless loop.", flush=True)
+    import handler as _handler_mod
 
-    from handler import handler
-
-    max_concurrency = int(os.getenv("MAX_CONCURRENCY", "4"))
-    runpod.serverless.start(
-        {
-            "handler": handler,
-            "return_aggregate_stream": True,
-            "concurrency_modifier": lambda _: max_concurrency,
-        }
+    # Inject the exact model component filenames we linked into the workflow.
+    _handler_mod._MODEL_FILENAMES.update(
+        model_files.resolve_filenames(MODEL_VARIANT, PRECISION)
     )
+
+    runpod.serverless.start({"handler": _handler_mod.handler, "return_aggregate_stream": True})
 
 
 if __name__ == "__main__":

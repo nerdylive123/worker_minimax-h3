@@ -1,31 +1,35 @@
 # Plan: `worker_minimax-h3` — RunPod Serverless Worker for MiniMax-H3
 
-> Status: **proposed**. Source research completed 2026-09-14 against the RunPod Hub docs and the `MiniMaxAI/MiniMax-H3` Hugging Face model card.
+> **⚠️ REVISED 2026-09-15.** The original draft below targeted **SGLang** serving the official `MiniMaxAI/MiniMax-H3` checkpoint. Two decisions changed that:
+> 1. **Model source switched to [`Comfy-Org/MiniMax-H3`](https://huggingface.co/Comfy-Org/MiniMax-H3)** — a repackaged **single-file ComfyUI build** (no `model_index.json`, not loadable by `DiffusionPipeline.from_pretrained` or SGLang's `--model-path`).
+> 2. **Load-from-cache-first** — use RunPod's endpoint model caching (`/runpod-volume/huggingface-cache/hub`).
+>
+> The serving backend is therefore **headless ComfyUI** (not SGLang): the worker symlinks the cached single-file components into `ComfyUI/models/...`, launches ComfyUI, and submits the official MiniMax-H3 workflows. See **§8 Revision** at the bottom for the new architecture; §1–7 are kept as the research record.
 
 ---
 
 ## 1. What this worker is
 
-A RunPod **serverless GPU worker** that serves **[`MiniMaxAI/MiniMax-H3`](https://huggingface.co/MiniMaxAI/MiniMax-H3)** and is publishable to the RunPod Hub.
+A RunPod **serverless GPU worker** that serves **[`Comfy-Org/MiniMax-H3`](https://huggingface.co/Comfy-Org/MiniMax-H3)** (single-file build of MiniMax-H3) and is publishable to the RunPod Hub.
 
 The repo is currently empty (fresh clone, no README), so everything below is built from scratch following the canonical `runpod-workers` layout.
 
 ### The model (verified — this changes the design)
 - **Not a chat LLM.** MiniMax-H3 is a **33B omni-modal video + audio generation model** (diffusion transformer). Inputs: text / image(s) / video / audio → output: **video with synchronized stereo audio**.
-- Two open-sourced task variants in one repo: **`fl2va`** (text-to-audio-video, optional first/last frame) and **`ref2va`** (reference-to-audio-video, up to 9 images + 3 videos + 3 audio clips).
-- Serving stack per the model card: **SGLang** (`sglang serve --model-variant fl2va|ref2va`), diffusers, or ComfyUI. **Stock vLLM does NOT support it** (vLLM only lists MiniMax M2/M3 LLMs).
+- Two open-sourced task variants: **`fl2va`** (text/image-to-audio-video) and **`ref2va`** (reference-to-audio-video). Official ComfyUI workflow templates exist (`video_minimax_h3_t2v.json`, `video_minimax_h3_r2v.json`).
+- Model artifacts (Comfy-Org): single-file safetensors under `diffusion_models/`, `text_encoders/`, `vae/`, `loras/`, `embeddings/`, `model_patches/`. Precisions: `bf16`, `int8_convrot` (preferred on cu130), `fp8_scaled` (fallback), `nvfp4_awq` (text encoder).
 - Video: 4–15 s, 24 FPS, multiple aspect ratios; native 32 kHz stereo audio.
 - License: **MiniMax H3 Community License** — non-EU/UK/Korea/US territory restriction, >$20M/yr revenue needs authorization, outputs may not train other models. This must be surfaced in the README and Hub description.
 
-### Architecture decision
-The public docs do **not** document the exact self-hosted SGLang HTTP request/response shape for this video model (only MiniMax's hosted API is documented: `POST /video-generation-v2-create`, etc.). So we will **not** hard-code a guessed video endpoint.
+### Architecture decision (revised)
+The official `MiniMaxAI/MiniMax-H3` checkpoint documents SGLang/diffusers serving, but the **Comfy-Org build the user chose is ComfyUI-only**. So the worker serves via **headless ComfyUI**, which is well-defined (unlike the undocumented SGLang self-hosted video route):
 
-Instead we follow the **worker-vllm supervisor + generic-proxy pattern**:
-- `main.py` launches `sglang serve` as a subprocess, health-polls it, then starts the RunPod serverless loop.
-- `handler.py` is a thin async proxy that forwards `job["input"]` to the local SGLang server via a **generic `{route, body, method}` passthrough**, plus a convenience high-level generate action.
-- This keeps the worker correct regardless of SGLang's exact video route, and is the pattern the official `worker-vllm` uses.
+- `main.py` resolves the cached model snapshot (**cache-first**), symlinks components into `ComfyUI/models/`, launches ComfyUI, health-polls, then starts the serverless loop.
+- `handler.py` injects per-request params into the official GUI workflow, converts it to ComfyUI's API format (`workflow_api.gui_to_api`), submits to `/prompt`, polls `/history`, returns the video from `/view`.
 
 ---
+
+
 
 ## 2. Repo structure (target tree)
 

@@ -1,24 +1,31 @@
 {
   "tests": [
     {
-      "name": "health_smoke",
-      "input": { "route": "/health", "method": "GET" },
+      "name": "comfyui_health",
+      "input": { "route": "/", "method": "GET" },
       "timeout": 120000
     },
     {
       "name": "text_to_video_tiny",
       "input": {
-        "action": "generate",
-        "prompt": "a cat sitting on a windowsill",
+        "action": "t2v",
+        "prompt": "a cat sitting on a windowsill, soft daylight",
+        "width": 608,
+        "height": 352,
         "duration": 4,
-        "ratio": "1:1"
+        "turbo": true,
+        "turbo_steps": 4,
+        "return_base64": false
       },
-      "timeout": 600000
+      "timeout": 900000
     }
   ],
   "config": {
     "gpuTypeId": "NVIDIA A40",
     "gpuCount": 1,
-    "env": [{ "key": "SGLANG_MODEL_VARIANT", "value": "fl2va" }]
+    "env": [
+      { "key": "MODEL_VARIANT", "value": "fl2va" },
+      { "key": "PRECISION", "value": "int8_convrot" }
+    ]
   }
 }

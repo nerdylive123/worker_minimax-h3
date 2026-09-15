@@ -1,8 +1,12 @@
 {
   "input": {
-    "action": "generate",
-    "prompt": "a red balloon drifting over a city",
-    "duration": 4,
-    "ratio": "16:9"
+    "action": "t2v",
+    "prompt": "a red balloon drifting over a city at dusk, cinematic",
+    "width": 736,
+    "height": 416,
+    "duration": 5,
+    "turbo": true,
+    "turbo_steps": 8,
+    "return_base64": false
   }
 }
