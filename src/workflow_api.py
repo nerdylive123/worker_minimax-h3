@@ -71,6 +71,98 @@ def set_subgraph_params(workflow: Dict[str, Any], params: Dict[str, Any]) -> int
     return updated
 
 
+# Widget index maps for the top-level (non-subgraph) MiniMax-H3 workflows such
+# as the official R2V template, where the sampler graph is not in a subgraph.
+_TOPLEVEL_WIDGETS = {
+    "PrimitiveStringMultiline": {"prompt": 0},
+    "PrimitiveFloat": {"duration": 0},
+    "ResolutionSelector": {"megapixels": 1},
+    "UNETLoader": {"unet_name": 0},
+    "CLIPLoader": {"clip_name": 0},
+    "VAELoader": {"vae_name": 0, "audio_vae_name": 0},
+    "LoraLoaderModelOnly": {"turbo_lora": 0, "turbo_strength": 1},
+}
+
+# ResolutionSelector common (width, height, megapixels) presets for ~0.4 MP.
+_RESOLUTION_PRESETS = {
+    "16:9": ("16:9 (Widescreen)", 0.4),
+    "9:16": ("9:16 (Portrait)", 0.4),
+    "1:1": ("1:1 (Square)", 0.4),
+    "4:3": ("4:3 (Classic)", 0.4),
+    "3:4": ("3:4 (Portrait)", 0.4),
+    "21:9": ("21:9 (Ultrawide)", 0.4),
+}
+
+
+def _set_widget(node: Dict[str, Any], index: int, value: Any) -> None:
+    widgets = node.setdefault("widgets_values", [])
+    while len(widgets) <= index:
+        widgets.append(None)
+    widgets[index] = value
+
+
+def set_toplevel_params(workflow: Dict[str, Any], params: Dict[str, Any]) -> int:
+    """Inject params into a top-level (non-subgraph) MiniMax-H3 workflow.
+
+    Used for the R2V template, whose sampler nodes are top-level rather than
+    inside a subgraph instance. Returns the number of nodes updated.
+    """
+    updated = 0
+    seen_vae = 0  # first VAELoader = video vae, second = audio vae
+    for node in workflow.get("nodes", []):
+        ntype = node.get("type")
+        mapping = _TOPLEVEL_WIDGETS.get(ntype)
+        if not mapping:
+            continue
+        changed = False
+        for key, index in mapping.items():
+            if ntype == "VAELoader":
+                # Distinguish video vs audio VAE by order of appearance.
+                key = "vae_name" if seen_vae == 0 else "audio_vae_name"
+            if params.get(key) is None:
+                continue
+            _set_widget(node, index, params[key])
+            changed = True
+        if ntype == "ResolutionSelector" and params.get("ratio"):
+            preset = _RESOLUTION_PRESETS.get(str(params["ratio"]))
+            if preset:
+                _set_widget(node, 0, preset[0])
+                _set_widget(node, 1, preset[1])
+                changed = True
+        if ntype == "VAELoader":
+            seen_vae += 1
+        if changed:
+            updated += 1
+    return updated
+
+
+def strip_unlinked_load_media(workflow: Dict[str, Any]) -> int:
+    """Remove LoadImage/LoadVideo/LoadAudio nodes and their outbound links.
+
+    The bundled R2V template ships reference images that are not part of the
+    repo; a bare text prompt can't satisfy them. Dropping the nodes lets the
+    workflow run in text-only mode (ref images/videos can be re-added by the
+    caller via a raw workflow). Returns the number of links removed.
+    """
+    media_types = ("LoadImage", "LoadVideo", "LoadAudio")
+    drop_ids = {n["id"] for n in workflow.get("nodes", []) if n.get("type") in media_types}
+    if not drop_ids:
+        return 0
+    workflow["nodes"] = [n for n in workflow.get("nodes", []) if n["id"] not in drop_ids]
+    links = workflow.get("links", [])
+    kept = [l for l in links if _norm_link(l) and _norm_link(l)[1] not in drop_ids and _norm_link(l)[3] not in drop_ids]
+    removed = len(links) - len(kept)
+    workflow["links"] = kept
+    return removed
+
+
+def set_params(workflow: Dict[str, Any], params: Dict[str, Any]) -> None:
+    """Inject params regardless of whether the workflow uses a subgraph."""
+    n = set_subgraph_params(workflow, params)
+    if n == 0:
+        set_toplevel_params(workflow, params)
+
+
 def gui_to_api(workflow: Dict[str, Any]) -> Dict[str, Any]:
     """Return an API-format prompt dict for a GUI- or API-format workflow."""
     if is_api_format(workflow):
@@ -86,13 +178,22 @@ def gui_to_api(workflow: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _widget_value_map(node: Dict[str, Any]) -> Dict[str, Any]:
-    """Map a node's widget values onto its unlinked input names positionally."""
+    """Map a node's widget values onto its unlinked input names positionally.
+
+    Skips optional reference-media inputs (``ref_*``, ``image``, ``video``,
+    ``audio``) that are unwired: leaving them unset keeps them optional, and
+    positional widget values (dimensions etc.) must never be assigned to them.
+    Empty-string widgets are also skipped.
+    """
     widgets = node.get("widgets_values") or []
     named = [i for i in node.get("inputs", []) or [] if i.get("name")]
     unlinked = [i["name"] for i in named if i.get("link") is None]
+    media_prefixes = ("ref_", "image", "video", "audio")
     out: Dict[str, Any] = {}
     for idx, name in enumerate(unlinked):
-        if idx < len(widgets) and widgets[idx] is not None:
+        if name.startswith(media_prefixes):
+            continue
+        if idx < len(widgets) and widgets[idx] not in (None, ""):
             out[name] = widgets[idx]
     return out
 
@@ -114,6 +215,14 @@ def _manual_gui_to_api(workflow: Dict[str, Any]) -> Dict[str, Any]:
             if inp.get("link") is not None and inp["link"] in outer_src:
                 o = outer_src[inp["link"]]
                 inputs[inp["name"]] = [o[0], o[1]]
+        # Nodes with no declared inputs (e.g. PrimitiveStringMultiline,
+        # PrimitiveFloat, ResolutionSelector) still carry widget values that
+        # downstream nodes consume; serialize the first widget under a
+        # conventional key so it isn't dropped.
+        if not inputs and node.get("widgets_values"):
+            w = node["widgets_values"][0]
+            if w not in (None, ""):
+                inputs["value"] = w
         prompt[nid] = {"class_type": node.get("type"), "inputs": inputs}
 
     def expand_subgraph(node: Dict[str, Any]) -> str:

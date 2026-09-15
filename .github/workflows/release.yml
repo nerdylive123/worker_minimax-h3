@@ -27,12 +27,20 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Set env
+        env:
+          # Pass the dispatch version through an env var (never inline it into
+          # the shell) so a crafted value can't execute command substitution.
+          INPUT_VERSION: ${{ github.event.inputs.version || github.ref_name }}
         run: |
           echo "DOCKERHUB_REPO=${{ vars.DOCKERHUB_REPO || 'nerdylive123' }}" >> $GITHUB_ENV
           echo "DOCKERHUB_IMG=${{ vars.DOCKERHUB_IMG || 'worker-minimax-h3' }}" >> $GITHUB_ENV
           echo "HUGGINGFACE_ACCESS_TOKEN=${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}" >> $GITHUB_ENV
-          VERSION="${{ github.event.inputs.version || github.ref_name }}"
-          echo "RELEASE_VERSION=${VERSION}" >> $GITHUB_ENV
+          # Validate semver format before use; reject anything else.
+          if [[ ! "$INPUT_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9._-]+)?$ ]]; then
+            echo "::error::Invalid release version: $INPUT_VERSION"
+            exit 1
+          fi
+          echo "RELEASE_VERSION=${INPUT_VERSION}" >> $GITHUB_ENV
 
       - uses: docker/bake-action@v4
         with:

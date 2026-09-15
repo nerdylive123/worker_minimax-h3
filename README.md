@@ -85,9 +85,10 @@ The worker resolves that snapshot first and loads offline. If it's absent (e.g. 
 }
 ```
 - `action`: `t2v` / `generate` (uses `workflows/t2v.json`) or `r2v` / `ref2va` (uses `workflows/r2v.json`).
-- Optional per-request overrides: `width`, `height`, `duration` (s), `seed`, `turbo`, `turbo_steps`, `turbo_strength`.
-- `return_base64` (default `true`): return the video as `video_base64`; `false` returns a `video_url` pointing at ComfyUI's `/view`.
+- Optional per-request overrides: `width`, `height`, `duration` (s), `seed`, `turbo`, `turbo_steps`, `turbo_strength`, `ratio`.
+- `return_base64` (default `true`): returns the video as `video_base64` — **the only remotely-usable delivery mode**, since a ComfyUI `/view` URL is loopback-only (`127.0.0.1`) and unreachable by remote callers. With `false` the worker still fetches the bytes to confirm the artifact and returns the on-worker path + size (in-pod debugging only).
 - Model component filenames (unet/clip/vae/lora) are fixed at container start from `MODEL_VARIANT` + `PRECISION`.
+- **R2V reference media:** the bundled `r2v.json` ships demo reference images that aren't in the image, so for a bare text prompt the worker strips those `LoadImage` nodes and runs text-only. To use reference images/video/audio, supply them via a **raw workflow** (mode 2) with your own `LoadImage`/uploaded inputs.
 
 Response:
 ```json

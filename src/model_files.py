@@ -22,10 +22,10 @@ VALID_PRECISIONS = ("bf16", "int8_convrot", "fp8_scaled", "nvfp4_awq")
 
 DIFFUSION_FILE = {
     ("fl2va", "bf16"): "minimax_h3_fl2va_bf16.safetensors",
-    ("fl2va", "int8_convrot"): "minimax_h3_fl2va_int8_convrot.safetensors",
+    ("fl2va", "int8_convrot"): "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
     ("fl2va", "fp8_scaled"): "minimax_h3_fl2va_pruned_fp8_scaled.safetensors",
     ("ref2va", "bf16"): "minimax_h3_ref2va_bf16.safetensors",
-    ("ref2va", "int8_convrot"): "minimax_h3_ref2va_int8_convrot.safetensors",
+    ("ref2va", "int8_convrot"): "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
     ("ref2va", "fp8_scaled"): "minimax_h3_ref2va_pruned_fp8_scaled.safetensors",
 }
 
