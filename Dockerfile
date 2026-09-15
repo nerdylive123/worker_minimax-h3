@@ -26,6 +26,12 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN git clone --depth 1 --branch "${COMFYUI_REF}" "${COMFYUI_REPO}" /ComfyUI \
     && python3 -m pip install --no-cache-dir --ignore-installed -r /ComfyUI/requirements.txt
 
+# Model-loader deps for MiniMax-H3: Qwen3-VL text encoder needs a recent
+# transformers (>=4.51) plus safetensors/accelerate/diffusers. Pin floors so an
+# older base image can't silently break model loading at startup.
+RUN python3 -m pip install --no-cache-dir --ignore-installed \
+    "transformers>=4.51.0" "accelerate>=1.0.0" "safetensors>=0.4.5" "diffusers>=0.33.0" "sentencepiece" "protobuf"
+
 COPY builder/requirements.txt /requirements.txt
 RUN python3 -m pip install --no-cache-dir --ignore-installed -r /requirements.txt
 

@@ -154,47 +154,78 @@ def _launch_comfyui() -> subprocess.Popen:
 
         argv.extend(shlex.split(extra))
     print(f"[main] launching: {' '.join(argv)}", flush=True)
-    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
 
-    # Drain stdout in the background into a bounded buffer so the child never
-    # blocks on a full pipe and _drain_log never waits on EOF of a live proc.
+    # Drain stdout in the background: tee it to the pod log (so ComfyUI's own
+    # output is visible for debugging) and keep a bounded tail for _drain_log.
     import threading
 
     buffer = {"data": "", "lock": threading.Lock()}
 
     def _pump() -> None:
         try:
-            for chunk in iter(lambda: proc.stdout.read(4096), ""):  # type: ignore[union-attr]
-                if not chunk:
+            for line in iter(proc.stdout.readline, ""):  # type: ignore[union-attr]
+                if not line:
                     break
+                print(f"[comfyui] {line.rstrip()}", flush=True)
                 with buffer["lock"]:
-                    buffer["data"] = (buffer["data"] + chunk)[-20000:]
+                    buffer["data"] = (buffer["data"] + line)[-20000:]
         except Exception:  # noqa: BLE001
             pass
 
     threading.Thread(target=_pump, daemon=True).start()
     proc._log_buffer = buffer  # type: ignore[attr-defined]
+    proc._start_time = time.monotonic()  # type: ignore[attr-defined]
     return proc
 
 
 async def _wait_for_health(proc: subprocess.Popen) -> Optional[str]:
+    """Poll until ComfyUI's HTTP server answers, tolerating long model loads.
+
+    Returns None on success. Only fails early if the process provably crashed
+    (exited within a short grace window); a long-running process that simply
+    hasn't opened its port yet is treated as still-loading, not failed.
+    """
     url = f"http://127.0.0.1:{COMFYUI_PORT}/"
     deadline = time.monotonic() + COMFYUI_STARTUP_TIMEOUT
+    grace = float(os.getenv("COMFYUI_CRASH_GRACE_SECONDS", "20"))
+    last_log = 0.0
     async with aiohttp.ClientSession() as session:
         while time.monotonic() < deadline:
-            if proc.poll() is not None:
-                return _drain_log(proc) or f"ComfyUI exited with code {proc.returncode}"
+            rc = proc.poll()
+            if rc is not None:
+                uptime = time.monotonic() - getattr(proc, "_start_time", 0.0)
+                log = _drain_log(proc)
+                # A quick exit is a real crash; report it with whatever it logged.
+                if uptime < grace or log:
+                    return (
+                        f"ComfyUI exited with code {rc} after {uptime:.1f}s. "
+                        f"Output: {log or '(no output captured)'}"
+                    )
+                return f"ComfyUI exited with code {rc} after {uptime:.1f}s"
             try:
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
                     if resp.status in (200, 404):  # server is up
                         return None
-            except aiohttp.ClientError:
+            except (aiohttp.ClientError, asyncio.TimeoutError):
                 pass
+            now = time.monotonic()
+            if now - last_log >= 15:
+                elapsed = now - getattr(proc, "_start_time", now)
+                print(f"[main] waiting for ComfyUI ({elapsed:.0f}s elapsed)...", flush=True)
+                last_log = now
             await asyncio.sleep(HEALTH_POLL_INTERVAL)
-    return _drain_log(proc) or "ComfyUI did not become healthy before the startup timeout"
+    return (
+        f"ComfyUI did not open port {COMFYUI_PORT} within {COMFYUI_STARTUP_TIMEOUT}s. "
+        f"Recent output: {_drain_log(proc) or '(none)'}"
+    )
 
 
 def _startup_error_handler_factory(message: str):
+    # Echo the cause to the pod log so "see 'startup' for details" is actually
+    # diagnosable from the logs, not just the job result payload.
+    print(f"[main] STARTUP FAILURE: {message}", flush=True)
+
     def _handler(job):  # noqa: ARG001
         return {"error": "Worker failed to start; see 'startup' for details.", "startup": message}
 
