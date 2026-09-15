@@ -159,6 +159,7 @@ CI (`.github/workflows/`) builds `dev-<branch>` images on PRs and tagged `vX.Y.Z
 ├── .github/workflows/   dev + release CI
 ├── .runpod/             hub.json (listing) + tests.json (release gate)
 ├── builder/             requirements.txt
+├── handler.py           # Hub entrypoint shim (adds src/ to path, runs the supervisor)
 ├── src/                 main.py, handler.py, workflow_api.py, model_cache.py, model_files.py
 ├── workflows/           official Comfy-Org MiniMax-H3 templates (t2v.json, r2v.json)
 ├── docs/PLAN.md         design plan & research

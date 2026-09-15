@@ -51,6 +51,9 @@ ENV BASE_PATH=$BASE_PATH \
 
 COPY src /src
 COPY workflows /workflows
+COPY handler.py /handler.py
 
 WORKDIR /src
-ENTRYPOINT ["python3", "-u", "/src/main.py"]
+# Root handler.py is the Hub-discoverable entrypoint; it adds src/ to the path
+# and runs the supervisor (which launches ComfyUI + the serverless loop).
+ENTRYPOINT ["python3", "-u", "/handler.py"]
