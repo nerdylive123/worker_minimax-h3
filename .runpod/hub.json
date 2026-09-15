@@ -1,0 +1,77 @@
+{
+  "title": "MiniMax-H3",
+  "description": "Serverless worker for MiniMax-H3 — a 33B omni-modal video+audio generation model (text/image -> video + stereo audio), served via ComfyUI and loaded from RunPod's endpoint model cache (cache-first). Uses the Comfy-Org/MiniMax-H3 single-file build. NOTE: the MiniMax H3 Community License applies (territory & usage restrictions; outputs may not be used to train other models).",
+  "type": "serverless",
+  "category": "video",
+  "iconUrl": "https://dummyimage.com/100x100/7c3aed/fff&text=H3",
+  "config": {
+    "runsOn": "GPU",
+    "containerDiskInGb": 200,
+    "gpuIds": "ADA_80_PRO,AMPERE_80",
+    "gpuCount": 1,
+    "allowedCudaVersions": ["13.0", "12.8"],
+    "env": [
+      {
+        "key": "MODEL_NAME",
+        "input": {
+          "name": "Model",
+          "type": "huggingface",
+          "description": "Hugging Face repo to load from the endpoint model cache. Defaults to the Comfy-Org single-file build.",
+          "default": "Comfy-Org/MiniMax-H3",
+          "required": true
+        }
+      },
+      {
+        "key": "MODEL_VARIANT",
+        "input": {
+          "name": "Model variant",
+          "type": "string",
+          "description": "Which MiniMax-H3 task variant to serve.",
+          "default": "fl2va",
+          "required": true,
+          "options": [
+            { "label": "FL2VA (text/image-to-audio-video)", "value": "fl2va" },
+            { "label": "Ref2VA (reference-to-audio-video)", "value": "ref2va" }
+          ]
+        }
+      },
+      {
+        "key": "PRECISION",
+        "input": {
+          "name": "Precision",
+          "type": "string",
+          "description": "Weight quantization. int8_convrot is preferred on cu130; fp8_scaled and bf16 are fallbacks.",
+          "default": "int8_convrot",
+          "options": [
+            { "label": "int8_convrot (recommended, cu130)", "value": "int8_convrot" },
+            { "label": "bf16 (full quality, most VRAM)", "value": "bf16" },
+            { "label": "fp8_scaled (fallback)", "value": "fp8_scaled" },
+            { "label": "nvfp4_awq (text encoder only)", "value": "nvfp4_awq" }
+          ]
+        }
+      },
+      {
+        "key": "GENERATION_TIMEOUT",
+        "input": { "name": "Generation timeout (s)", "type": "number", "default": 1800, "min": 60, "max": 7200, "advanced": true }
+      },
+      {
+        "key": "COMFYUI_EXTRA_ARGS",
+        "input": { "name": "ComfyUI extra args", "type": "string", "description": "Extra CLI args passed to ComfyUI main.py.", "advanced": true }
+      },
+      {
+        "key": "HF_TOKEN",
+        "input": { "name": "Hugging Face token", "type": "string", "description": "Only needed if the model is gated for your account.", "advanced": true }
+      }
+    ],
+    "presets": [
+      {
+        "name": "FL2VA int8 (fast, recommended)",
+        "defaults": { "MODEL_NAME": "Comfy-Org/MiniMax-H3", "MODEL_VARIANT": "fl2va", "PRECISION": "int8_convrot" }
+      },
+      {
+        "name": "FL2VA bf16 (max quality)",
+        "defaults": { "MODEL_NAME": "Comfy-Org/MiniMax-H3", "MODEL_VARIANT": "fl2va", "PRECISION": "bf16" }
+      }
+    ]
+  }
+}

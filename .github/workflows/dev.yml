@@ -1,0 +1,39 @@
+name: dev
+
+# PR-time validation only: build the image WITHOUT registry credentials and
+# WITHOUT pushing. This job checks out PR-controlled Docker/Bake content, so it
+# must never be handed secrets or push rights (a malicious PR could otherwise
+# exfiltrate the Docker Hub / HF tokens or publish rogue images). Publishing
+# happens only in release.yml on trusted tags/dispatch.
+
+on:
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clear space
+        run: rm -rf /usr/share/dotnet /opt/ghc "/usr/local/share/boost" "$AGENT_TOOLSDIRECTORY"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Set env
+        run: |
+          echo "DOCKERHUB_REPO=${{ vars.DOCKERHUB_REPO || 'nerdylive123' }}" >> $GITHUB_ENV
+          echo "DOCKERHUB_IMG=${{ vars.DOCKERHUB_IMG || 'worker-minimax-h3' }}" >> $GITHUB_ENV
+          echo "RELEASE_VERSION=pr-${{ github.event.pull_request.number || 'local' }}" >> $GITHUB_ENV
+
+      # Build only (no login, no push) to validate the Dockerfile compiles.
+      - uses: docker/bake-action@v5
+        with:
+          push: false
+          load: false
+          set: |
+            *.args.DOCKERHUB_REPO=${{ env.DOCKERHUB_REPO }}
+            *.args.DOCKERHUB_IMG=${{ env.DOCKERHUB_IMG }}
+            *.args.RELEASE_VERSION=${{ env.RELEASE_VERSION }}
