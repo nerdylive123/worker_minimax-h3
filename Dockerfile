@@ -26,6 +26,18 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN git clone --depth 1 --branch "${COMFYUI_REF}" "${COMFYUI_REPO}" /ComfyUI \
     && python3 -m pip install --no-cache-dir --ignore-installed -r /ComfyUI/requirements.txt
 
+# --- Realign torch/torchaudio ------------------------------------------------
+# pip dependency resolution (under --ignore-installed) can leave a torchaudio
+# whose native lib doesn't match the base image's torch, crashing ComfyUI at
+# import ("libtorchaudio.so: cannot open shared object file"). Detect the
+# installed torch version and force-reinstall the EXACT-matching torchaudio,
+# torchvision, and torch from the PyTorch cu130 index so their ABIs align.
+RUN TORCH_VER="$(python3 -c 'import torch; print(torch.__version__.split("+")[0])')" \
+    && echo "Aligning torchaudio/torchvision to torch==${TORCH_VER}" \
+    && python3 -m pip install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cu130 \
+        "torch==${TORCH_VER}" "torchaudio==${TORCH_VER}" "torchvision==${TORCH_VER}"
+
 # Model-loader deps for MiniMax-H3: Qwen3-VL text encoder needs a recent
 # transformers (>=4.51) plus safetensors/accelerate/diffusers. Pin floors so an
 # older base image can't silently break model loading at startup.
