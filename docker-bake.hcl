@@ -17,6 +17,12 @@ variable "HUGGINGFACE_ACCESS_TOKEN" {
   default = ""
 }
 
+// Default group so `docker buildx bake` (and bake-action with no explicit
+// target) builds the worker target.
+group "default" {
+  targets = ["worker-minimax-h3"]
+}
+
 target "worker-minimax-h3" {
   dockerfile = "Dockerfile"
   context    = "."
