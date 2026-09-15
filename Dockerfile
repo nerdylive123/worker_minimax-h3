@@ -21,11 +21,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # Clone ComfyUI and install its requirements. The MiniMax-H3 nodes
 # (MiniMaxH3ImageToVideo, SaveVideo, CreateVideo, VAEDecodeAudio, ...) are in
 # recent ComfyUI; pin COMFYUI_REF to a dated commit for reproducible builds.
+# --ignore-installed avoids pip trying to uninstall Debian/apt-managed Python
+# packages (e.g. cryptography) that have no RECORD file (uninstall-no-record-file).
 RUN git clone --depth 1 --branch "${COMFYUI_REF}" "${COMFYUI_REPO}" /ComfyUI \
-    && python3 -m pip install --no-cache-dir -r /ComfyUI/requirements.txt
+    && python3 -m pip install --no-cache-dir --ignore-installed -r /ComfyUI/requirements.txt
 
 COPY builder/requirements.txt /requirements.txt
-RUN python3 -m pip install --no-cache-dir -r /requirements.txt
+RUN python3 -m pip install --no-cache-dir --ignore-installed -r /requirements.txt
 
 # --- Runtime configuration --------------------------------------------------
 # HF cache root matches RunPod's endpoint model-cache mount so cached models
