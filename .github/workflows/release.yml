@@ -42,7 +42,7 @@ jobs:
           fi
           echo "RELEASE_VERSION=${INPUT_VERSION}" >> $GITHUB_ENV
 
-      - uses: docker/bake-action@v4
+      - uses: docker/bake-action@v5
         with:
           push: true
           set: |
