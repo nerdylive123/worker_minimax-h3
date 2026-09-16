@@ -23,20 +23,20 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # recent ComfyUI; pin COMFYUI_REF to a dated commit for reproducible builds.
 # --ignore-installed avoids pip trying to uninstall Debian/apt-managed Python
 # packages (e.g. cryptography) that have no RECORD file (uninstall-no-record-file).
+#
+# IMPORTANT: the base image ships torch 2.9.1 (torch291). ComfyUI's requirements
+# would otherwise upgrade torch, and cu130 has NO torchaudio matching newer
+# torch (torchaudio caps at 2.11.0+cu130), which crashed ComfyUI at import
+# ("libtorchaudio.so: cannot open shared object file"). Pin torch/torchaudio/
+# torchvision to the base's torch version IN THE SAME install command so pip
+# resolves a consistent, ABI-matched set.
+ARG TORCH_VERSION=2.9.1
 RUN git clone --depth 1 --branch "${COMFYUI_REF}" "${COMFYUI_REPO}" /ComfyUI \
-    && python3 -m pip install --no-cache-dir --ignore-installed -r /ComfyUI/requirements.txt
-
-# --- Realign torch/torchaudio ------------------------------------------------
-# pip dependency resolution (under --ignore-installed) can leave a torchaudio
-# whose native lib doesn't match the base image's torch, crashing ComfyUI at
-# import ("libtorchaudio.so: cannot open shared object file"). Detect the
-# installed torch version and force-reinstall the EXACT-matching torchaudio,
-# torchvision, and torch from the PyTorch cu130 index so their ABIs align.
-RUN TORCH_VER="$(python3 -c 'import torch; print(torch.__version__.split("+")[0])')" \
-    && echo "Aligning torchaudio/torchvision to torch==${TORCH_VER}" \
-    && python3 -m pip install --no-cache-dir \
+    && python3 -m pip install --no-cache-dir --ignore-installed \
         --index-url https://download.pytorch.org/whl/cu130 \
-        "torch==${TORCH_VER}" "torchaudio==${TORCH_VER}" "torchvision==${TORCH_VER}"
+        --extra-index-url https://pypi.org/simple \
+        "torch==${TORCH_VERSION}" "torchaudio==${TORCH_VERSION}" "torchvision==${TORCH_VERSION}" \
+        -r /ComfyUI/requirements.txt
 
 # Model-loader deps for MiniMax-H3: Qwen3-VL text encoder needs a recent
 # transformers (>=4.51) plus safetensors/accelerate/diffusers. Pin floors so an
