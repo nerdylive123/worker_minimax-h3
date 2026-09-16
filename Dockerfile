@@ -28,14 +28,16 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # would otherwise upgrade torch, and cu130 has NO torchaudio matching newer
 # torch (torchaudio caps at 2.11.0+cu130), which crashed ComfyUI at import
 # ("libtorchaudio.so: cannot open shared object file"). Pin torch/torchaudio/
-# torchvision to the base's torch version IN THE SAME install command so pip
-# resolves a consistent, ABI-matched set.
+# torchvision to the base's versions IN THE SAME install command so pip
+# resolves a consistent, ABI-matched set. NOTE the differing version schemes:
+# torch/torchaudio use 2.9.1, but the matching torchvision is 0.24.1.
 ARG TORCH_VERSION=2.9.1
+ARG TORCHVISION_VERSION=0.24.1
 RUN git clone --depth 1 --branch "${COMFYUI_REF}" "${COMFYUI_REPO}" /ComfyUI \
     && python3 -m pip install --no-cache-dir --ignore-installed \
         --index-url https://download.pytorch.org/whl/cu130 \
         --extra-index-url https://pypi.org/simple \
-        "torch==${TORCH_VERSION}" "torchaudio==${TORCH_VERSION}" "torchvision==${TORCH_VERSION}" \
+        "torch==${TORCH_VERSION}" "torchaudio==${TORCH_VERSION}" "torchvision==${TORCHVISION_VERSION}" \
         -r /ComfyUI/requirements.txt
 
 # Model-loader deps for MiniMax-H3: Qwen3-VL text encoder needs a recent
